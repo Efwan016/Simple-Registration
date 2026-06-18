@@ -1,18 +1,38 @@
 import pandas as pd
+from itertools import zip_longest
 
 # Data dari lo yang udah dirapikan ke dalam list
-list_hp = ["Number_Your_Phone"]
-list_puk = ["Number_Your_PUK"]
+list_hp = ['Your_Numb']
 
-list_nik = ['Number_Your_NIK']
+list_puk = ['PUK_in_Number_format']
 
-list_kk = ['Number_Your_KK']
-df = pd.DataFrame({
-    'No_HP': list_hp,
-    'PUK': list_puk,
-    'NIK': list_nik,
-    'KK': list_kk
-})
+list_nik = ['Your_NIK']
+
+list_kk = ['Your_KK']
+
+jumlah_data = {
+    'No_HP': len(list_hp),
+    'PUK': len(list_puk),
+    'NIK': len(list_nik),
+    'KK': len(list_kk),
+}
+
+if len(set(jumlah_data.values())) != 1:
+    print("⚠️  Jumlah data tiap kolom belum sama:")
+    for nama_kolom, jumlah in jumlah_data.items():
+        print(f"   - {nama_kolom}: {jumlah}")
+    print("⚠️  Baris yang datanya kurang akan dikosongkan di Excel.")
+
+rows = []
+for no_hp, puk, nik, kk in zip_longest(list_hp, list_puk, list_nik, list_kk, fillvalue=''):
+    rows.append({
+        'No_HP': str(no_hp).strip(),
+        'PUK': str(puk).strip(),
+        'NIK': str(nik).strip(),
+        'KK': str(kk).strip(),
+    })
+
+df = pd.DataFrame(rows)
 
 df = df.astype(str)
 

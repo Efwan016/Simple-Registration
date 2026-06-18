@@ -183,15 +183,33 @@ def deteksi_hasil_registrasi(teks_halaman):
 
     kartu_terdaftar = (
         ("kartu" in teks or "nomor" in teks or "msisdn" in teks)
-        and ("sudah terdaftar" in teks or "telah terdaftar" in teks)
+        and (
+            "sudah terdaftar" in teks
+            or "telah terdaftar" in teks
+            or "sudah didaftarkan" in teks
+            or "telah didaftarkan" in teks
+        )
     )
     if kartu_terdaftar:
         return PESAN_KARTU_TERDAFTAR
 
-    if "berhasil" in teks and ("registrasi" in teks or "terdaftar" in teks):
+    berhasil = (
+        ("berhasil" in teks and ("registrasi" in teks or "terdaftar" in teks))
+        or ("selamat" in teks and ("sudah didaftarkan" in teks or "telah didaftarkan" in teks))
+    )
+    if berhasil:
         return PESAN_BERHASIL
 
     return PESAN_TIDAK_DIKENALI
+
+
+def deteksi_status_form(driver):
+    teks = driver.find_element(By.TAG_NAME, "body").text.lower()
+
+    if "nomor sudah terdaftar" in teks:
+        return PESAN_KARTU_TERDAFTAR, "Nomor sudah terdaftar"
+
+    return PESAN_TIDAK_DIKENALI, ""
 
 
 def tunggu_hasil_registrasi(driver, timeout=30):
@@ -276,6 +294,14 @@ try:
             
             # 4. Mengisi Nomor PUK
             isi_input(wait, By.NAME, "nomor_puk", puk)
+
+            time.sleep(1)
+            status_form, pesan_form = deteksi_status_form(driver)
+            if status_form == PESAN_KARTU_TERDAFTAR:
+                print(f"-> {pesan_form}. Ganti nomor dan PUK, NIK/KK tetap dipakai.")
+                index_kartu += 1
+                time.sleep(2)
+                continue
             
             # Otomatis Centang Kotak Persetujuan S&K
             print("-> Mencentang persetujuan Syarat & Ketentuan...")
