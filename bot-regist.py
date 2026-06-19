@@ -1,6 +1,8 @@
 import pandas as pd
 import time
 import sys
+import csv
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -10,12 +12,15 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 FILE_EXCEL = 'dagangan.xlsx'
+FILE_LAPORAN = 'laporan_registrasi.csv'
 KOLOM_WAJIB = {'No_HP', 'PUK', 'NIK', 'KK'}
 URL_REGISTRASI = 'https://registrasi.xl.co.id/'
 PESAN_NIK_TIDAK_TERDAFTAR = "nik_tidak_terdaftar"
 PESAN_NIK_MAKSIMAL = "nik_maksimal"
+PESAN_KK_BERMASALAH = "kk_bermasalah"
 PESAN_KARTU_TERDAFTAR = "kartu_terdaftar"
 PESAN_BERHASIL = "berhasil"
+PESAN_PUK_BERMASALAH = "puk_bermasalah"
 PESAN_TIDAK_DIKENALI = "tidak_dikenali"
 
 
@@ -71,6 +76,119 @@ def buat_data_identitas(dataframe):
         sudah_ada.add(key)
 
     return identitas
+
+
+def buat_laporan_kosong():
+    return {
+        'percobaan': [],
+        'nomor_berhasil': [],
+        'identitas_tidak_bisa_dipakai': [],
+        'nomor_gagal': [],
+    }
+
+
+def alasan_singkat(status, pesan):
+    pesan_lower = str(pesan).lower()
+
+    if status == PESAN_NIK_MAKSIMAL:
+        return 'NIK limit/penuh'
+    if status == PESAN_NIK_TIDAK_TERDAFTAR:
+        return 'NIK tidak terdaftar'
+    if status == PESAN_KK_BERMASALAH:
+        return 'KK bermasalah/tidak sesuai'
+    if status == PESAN_PUK_BERMASALAH:
+        return 'PUK salah/tidak valid'
+    if status in (PESAN_KARTU_TERDAFTAR, PESAN_BERHASIL):
+        if 'aktif' in pesan_lower:
+            return 'Nomor sudah aktif'
+        return 'Nomor berhasil/sudah terdaftar'
+    if status == 'error':
+        return 'Error sistem/automation'
+    return 'Status tidak dikenali'
+
+
+def status_nik_dari_laporan(nik, rows_berhasil, rows_identitas_gagal):
+    nik_berhasil = [row for row in rows_berhasil if row['NIK'] == nik]
+    nik_gagal = [row for row in rows_identitas_gagal if row['NIK'] == nik]
+
+    if any(row['Status'] == PESAN_NIK_MAKSIMAL for row in nik_gagal):
+        return 'LIMIT/PENUH - jangan dipakai lagi', 'NIK sudah terdaftar di batas maksimal'
+    if any(row['Status'] == PESAN_NIK_TIDAK_TERDAFTAR for row in nik_gagal):
+        return 'TIDAK BISA DIPAKAI', 'NIK tidak terdaftar'
+    if any(row['Status'] == PESAN_KK_BERMASALAH for row in nik_gagal):
+        return 'KK BERMASALAH', 'NIK/KK tidak sesuai atau KK tidak valid'
+    if nik_berhasil:
+        return 'MASIH BISA DIPAKAI', f"Terbukti berhasil di {len(nik_berhasil)} nomor"
+    if nik_gagal:
+        return 'BERMASALAH', alasan_singkat(nik_gagal[-1]['Status'], nik_gagal[-1]['Pesan'])
+    return 'BELUM ADA HASIL FINAL', 'Belum ada sukses/gagal identitas'
+
+
+def simpan_laporan(laporan):
+    rows_berhasil = laporan['nomor_berhasil']
+    rows_identitas_gagal = laporan['identitas_tidak_bisa_dipakai']
+    rows_gagal = laporan['nomor_gagal'] + rows_identitas_gagal
+
+    semua_nik = {}
+    for row in laporan['percobaan']:
+        key = (row['NIK'], row['KK'])
+        semua_nik[key] = row
+
+    with open(FILE_LAPORAN, 'w', newline='', encoding='utf-8-sig') as csvfile:
+        writer = csv.writer(csvfile)
+
+        writer.writerow(['BAGIAN 1 - NOMOR YANG BERHASIL'])
+        writer.writerow(['No_HP', 'PUK', 'NIK', 'KK', 'Status', 'Alasan Singkat'])
+        for row in rows_berhasil:
+            writer.writerow([
+                row['No_HP'],
+                row['PUK'],
+                row['NIK'],
+                row['KK'],
+                row['Status'],
+                alasan_singkat(row['Status'], row['Pesan']),
+            ])
+
+        writer.writerow([])
+        writer.writerow(['BAGIAN 2 - NOMOR YANG GAGAL / PERCOBAAN GAGAL'])
+        writer.writerow(['No_HP', 'PUK', 'NIK', 'KK', 'Status', 'Alasan Singkat'])
+        for row in rows_gagal:
+            writer.writerow([
+                row['No_HP'],
+                row['PUK'],
+                row['NIK'],
+                row['KK'],
+                row['Status'],
+                alasan_singkat(row['Status'], row['Pesan']),
+            ])
+
+        writer.writerow([])
+        writer.writerow(['BAGIAN 3 - CATATAN STATUS NIK'])
+        writer.writerow(['NIK', 'KK', 'Status NIK', 'Catatan'])
+        for (nik, kk), _ in semua_nik.items():
+            status_nik, catatan = status_nik_dari_laporan(nik, rows_berhasil, rows_identitas_gagal)
+            writer.writerow([nik, kk, status_nik, catatan])
+
+
+def catat_laporan(laporan, kategori, no_hp, puk, nik, kk, status, aksi, pesan):
+    data = {
+        'Waktu': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'No_HP': no_hp,
+        'PUK': puk,
+        'NIK': nik,
+        'KK': kk,
+        'Status': status,
+        'Aksi': aksi,
+        'Pesan': potong_teks(pesan, panjang=500),
+    }
+
+    laporan['percobaan'].append(data)
+    if kategori == 'berhasil':
+        laporan['nomor_berhasil'].append(data)
+    elif kategori == 'identitas_tidak_bisa':
+        laporan['identitas_tidak_bisa_dipakai'].append(data)
+    elif kategori == 'nomor_gagal':
+        laporan['nomor_gagal'].append(data)
 
 
 def isi_input(wait, by, selector, nilai):
@@ -170,8 +288,41 @@ def potong_teks(teks, panjang=1000):
 def deteksi_hasil_registrasi(teks_halaman):
     teks = teks_halaman.lower()
 
+    nomor_sudah_aktif = (
+        ("nomor" in teks or "nomer" in teks or "kartu" in teks or "sim" in teks)
+        and ("sudah aktif" in teks or "telah aktif" in teks)
+    )
+    if nomor_sudah_aktif:
+        return PESAN_KARTU_TERDAFTAR
+
+    puk_bermasalah = (
+        "puk" in teks
+        and (
+            "salah" in teks
+            or "tidak valid" in teks
+            or "invalid" in teks
+            or "bermasalah" in teks
+            or "gagal" in teks
+        )
+    )
+    if puk_bermasalah:
+        return PESAN_PUK_BERMASALAH
+
     if "nik tidak terdaftar" in teks:
         return PESAN_NIK_TIDAK_TERDAFTAR
+
+    kk_bermasalah = (
+        ("kk" in teks or "kartu keluarga" in teks)
+        and (
+            "tidak valid" in teks
+            or "tidak sesuai" in teks
+            or "tidak terdaftar" in teks
+            or "bermasalah" in teks
+            or "gagal" in teks
+        )
+    )
+    if kk_bermasalah:
+        return PESAN_KK_BERMASALAH
 
     nik_maksimal = (
         "nik" in teks
@@ -208,6 +359,15 @@ def deteksi_status_form(driver):
 
     if "nomor sudah terdaftar" in teks:
         return PESAN_KARTU_TERDAFTAR, "Nomor sudah terdaftar"
+
+    if ("nomor" in teks or "nomer" in teks or "kartu" in teks or "sim" in teks) and (
+        "sudah aktif" in teks or "telah aktif" in teks
+    ):
+        return PESAN_KARTU_TERDAFTAR, "Nomor sudah aktif"
+
+    hasil = deteksi_hasil_registrasi(teks)
+    if hasil != PESAN_TIDAK_DIKENALI:
+        return hasil, teks
 
     return PESAN_TIDAK_DIKENALI, ""
 
@@ -254,6 +414,8 @@ options.add_argument("--start-maximized")
 
 print("\n=== START AUTOMATION REGISTRASI AXIS/XL ===")
 print(f"Total kartu: {len(kartu_list)} | Total identitas: {len(identitas_list)}")
+laporan = buat_laporan_kosong()
+print(f"Laporan CSV akan dibuat setelah bot selesai: {FILE_LAPORAN}")
 
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
@@ -297,8 +459,24 @@ try:
 
             time.sleep(1)
             status_form, pesan_form = deteksi_status_form(driver)
-            if status_form == PESAN_KARTU_TERDAFTAR:
-                print(f"-> {pesan_form}. Ganti nomor dan PUK, NIK/KK tetap dipakai.")
+            if status_form in (PESAN_KARTU_TERDAFTAR, PESAN_BERHASIL):
+                aksi = "Ganti nomor dan PUK, NIK/KK tetap dipakai"
+                print(f"-> {pesan_form}. {aksi}.")
+                catat_laporan(laporan, 'berhasil', no_hp, puk, nik, kk, status_form, aksi, pesan_form)
+                index_kartu += 1
+                time.sleep(2)
+                continue
+            if status_form in (PESAN_NIK_TIDAK_TERDAFTAR, PESAN_NIK_MAKSIMAL, PESAN_KK_BERMASALAH):
+                aksi = "NIK/KK tidak bisa dipakai, nomor yang sama dicoba dengan NIK/KK berikutnya"
+                print(f"-> NIK/KK bermasalah. {aksi}.")
+                catat_laporan(laporan, 'identitas_tidak_bisa', no_hp, puk, nik, kk, status_form, aksi, pesan_form)
+                index_identitas += 1
+                time.sleep(2)
+                continue
+            if status_form == PESAN_PUK_BERMASALAH:
+                aksi = "PUK bermasalah, lanjut nomor berikutnya dengan NIK/KK yang sama"
+                print(f"-> PUK bermasalah. {aksi}.")
+                catat_laporan(laporan, 'nomor_gagal', no_hp, puk, nik, kk, status_form, aksi, pesan_form)
                 index_kartu += 1
                 time.sleep(2)
                 continue
@@ -330,44 +508,43 @@ try:
             print(f"-> Hasil terdeteksi: {hasil}")
             print(f"-> Pesan situs: {potong_teks(teks_hasil)}")
 
-            if hasil in (PESAN_NIK_TIDAK_TERDAFTAR, PESAN_NIK_MAKSIMAL):
-                print("-> NIK diganti, nomor yang sama akan dicoba ulang.")
+            if hasil in (PESAN_NIK_TIDAK_TERDAFTAR, PESAN_NIK_MAKSIMAL, PESAN_KK_BERMASALAH):
+                aksi = "NIK/KK tidak bisa dipakai, nomor yang sama dicoba dengan NIK/KK berikutnya"
+                print(f"-> {aksi}.")
+                catat_laporan(laporan, 'identitas_tidak_bisa', no_hp, puk, nik, kk, hasil, aksi, teks_hasil)
                 index_identitas += 1
+            elif hasil == PESAN_PUK_BERMASALAH:
+                aksi = "PUK bermasalah, lanjut nomor berikutnya dengan NIK/KK yang sama"
+                print(f"-> {aksi}.")
+                catat_laporan(laporan, 'nomor_gagal', no_hp, puk, nik, kk, hasil, aksi, teks_hasil)
+                index_kartu += 1
             elif hasil in (PESAN_KARTU_TERDAFTAR, PESAN_BERHASIL):
-                print("-> Nomor diganti, NIK yang sama tetap dipakai.")
+                aksi = "Ganti nomor dan PUK, NIK/KK tetap dipakai"
+                print(f"-> {aksi}.")
+                catat_laporan(laporan, 'berhasil', no_hp, puk, nik, kk, hasil, aksi, teks_hasil)
                 index_kartu += 1
             else:
-                pilihan = input(
-                    "Hasil belum dikenali. Ketik 'n' untuk ganti NIK, "
-                    "'k' untuk ganti kartu, atau lainnya untuk berhenti: "
-                ).strip().lower()
-                if pilihan == 'n':
-                    index_identitas += 1
-                elif pilihan == 'k':
-                    index_kartu += 1
-                else:
-                    break
+                aksi = "Hasil belum dikenali, lanjut nomor berikutnya dengan NIK/KK yang sama"
+                print(f"-> {aksi}.")
+                catat_laporan(laporan, 'nomor_gagal', no_hp, puk, nik, kk, hasil, aksi, teks_hasil)
+                index_kartu += 1
 
             time.sleep(5)
             
         except Exception as err:
             print(f"❌ Terjadi kendala saat memproses nomor {no_hp}: {err}")
             tampilkan_debug_halaman(driver)
-            pilihan = input(
-                "Ketik 'n' untuk ulang nomor ini dengan NIK berikutnya, "
-                "'k' untuk lanjut kartu berikutnya, atau lainnya untuk berhenti: "
-            ).strip().lower()
-            if pilihan == 'n':
-                index_identitas += 1
-            elif pilihan == 'k':
-                index_kartu += 1
-            else:
-                break
+            aksi = "Error teknis/status tidak kebaca, lanjut nomor berikutnya tanpa persetujuan"
+            catat_laporan(laporan, 'nomor_gagal', no_hp, puk, nik, kk, 'error', aksi, str(err))
+            index_kartu += 1
+            time.sleep(2)
 
     if index_kartu >= len(kartu_list):
         print("\n✅ Semua kartu/nomor sudah diproses.")
     elif index_identitas >= len(identitas_list):
         print("\n⚠️  Data NIK/KK sudah habis, masih ada nomor yang belum selesai.")
 finally:
+    simpan_laporan(laporan)
+    print(f"Laporan CSV sudah dibuat: {FILE_LAPORAN}")
     print("\n=== SEMUA DATA EXCEL SELESAI DIPROSES ===")
     driver.quit()

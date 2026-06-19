@@ -2,13 +2,21 @@ import pandas as pd
 from itertools import zip_longest
 
 # Data dari lo yang udah dirapikan ke dalam list
-list_hp = ['Your_Numb']
+list_hp = [
+    'Your No_HP data here'
+]
 
-list_puk = ['PUK_in_Number_format']
+list_puk = [
+    'Your PUK data here'
+    ]
 
-list_nik = ['Your_NIK']
+list_nik = [
+    'Your NIK data here'
+    ]
 
-list_kk = ['Your_KK']
+list_kk = [
+    'Your KK data here'
+    ]
 
 jumlah_data = {
     'No_HP': len(list_hp),
